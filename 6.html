@@ -1,0 +1,160 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8">
+  <title>Biểu đồ Doanh số Bán Theo Khung Giờ</title>
+  <script src="https://d3js.org/d3.v7.min.js"></script>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      text-align: center;
+    }
+    h2 {
+      text-align: center;
+    }
+    .bar:hover {
+      opacity: 0.8;
+    }
+    .tooltip {
+      position: absolute;
+      background-color: white;
+      border: 1px solid #ccc;
+      padding: 8px;
+      border-radius: 5px;
+      box-shadow: 0px 0px 10px rgba(0, 0, 0, 0.1);
+      pointer-events: none;
+      opacity: 0;
+      transition: opacity 0.3s;
+    }
+    #chart {
+      display: flex;
+      justify-content: center;
+    }
+  </style>
+</head>
+<body>
+  <h2>Doanh số Bán Theo Khung Giờ</h2>
+  <div id="chart"></div>
+  <div class="tooltip" id="tooltip"></div>
+
+  <script>
+    const margin = {top: 20, right: 30, bottom: 100, left: 70},
+          width = 1200 - margin.left - margin.right,
+          height = 600 - margin.top - margin.bottom;
+
+    const svg = d3.select("#chart")
+                  .append("svg")
+                  .attr("width", width + margin.left + margin.right)
+                  .attr("height", height + margin.top + margin.bottom)
+                  .append("g")
+                  .attr("transform", `translate(${margin.left},${margin.top})`);
+
+    const tooltip = d3.select("#tooltip");
+
+    // Đọc dữ liệu từ file CSV
+    d3.csv("data_ggsheet.csv").then(data => {
+      // Chuyển đổi dữ liệu
+      data.forEach(d => {
+        d["Thời gian tạo đơn"] = new Date(d["Thời gian tạo đơn"]);
+        d["Thành tiền"] = +d["Thành tiền"]; // Chuyển đổi thành số
+        d["Giờ"] = d["Thời gian tạo đơn"].getHours(); // Lấy giờ
+        d["Ngày"] = d["Thời gian tạo đơn"].toISOString().split('T')[0]; // Lấy ngày
+      });
+
+      // Phân loại thời gian theo khung giờ
+      const classifyTime = hour => {
+        return hour >= 8 && hour < 24 ? `${hour}:00-${hour}:59` : null;
+      };
+
+      // Thêm khung giờ vào dữ liệu
+      data.forEach(d => {
+        d["Khung giờ"] = classifyTime(d["Giờ"]);
+      });
+
+      // Tính tổng doanh thu theo khung giờ và số ngày duy nhất
+      const revenueByHour = d3.rollup(data.filter(d => d["Khung giờ"]), 
+        v => {
+          const totalRevenue = d3.sum(v, d => d["Thành tiền"]);
+          const uniqueDays = new Set(v.map(d => d["Ngày"])).size; // Số ngày duy nhất
+          return {
+            totalRevenue: totalRevenue,
+            avgRevenue: uniqueDays > 0 ? totalRevenue / uniqueDays : 0 // Doanh thu trung bình
+          };
+        },
+        d => d["Khung giờ"]
+      );
+
+      const result = Array.from(revenueByHour, ([hour, value]) => ({
+        hour: hour,
+        avgRevenue: Math.round(value.avgRevenue) || 0 // Doanh thu trung bình
+      }));
+
+      // Sắp xếp theo thứ tự khung giờ
+      const hourOrder = Array.from({length: 17}, (_, i) => `${i + 8}:00-${i + 8}:59`);
+      result.sort((a, b) => hourOrder.indexOf(a.hour) - hourOrder.indexOf(b.hour));
+
+      // Vẽ biểu đồ
+      const x = d3.scaleBand()
+                  .domain(result.map(d => d.hour))
+                  .range([0, width])
+                  .padding(0.2);
+
+      const y = d3.scaleLinear()
+                  .domain([0, d3.max(result, d => d.avgRevenue)])
+                  .nice()
+                  .range([height, 0]);
+
+      const xAxis = d3.axisBottom(x);
+      const yAxis = d3.axisLeft(y)
+                      .ticks(10)
+                      .tickFormat(d => `${(d / 1000).toFixed(0)}K`); // Hiển thị K
+
+      svg.append("g").attr("transform", `translate(0, ${height})`).call(xAxis)
+         .selectAll("text")  // Định dạng chữ trên trục X
+         .style("text-anchor", "end")
+         .attr("transform", "rotate(-45)"); // Xoay chữ lên 45 độ
+
+      svg.append("g").call(yAxis).style("display", "block"); // Hiển thị trục Y
+
+      svg.selectAll(".bar")
+         .data(result)
+         .enter()
+         .append("rect")
+         .attr("class", "bar")
+         .attr("x", d => x(d.hour))
+         .attr("y", d => y(d.avgRevenue))
+         .attr("width", x.bandwidth())
+         .attr("height", d => height - y(d.avgRevenue))
+         .attr("fill", (d, i) => d3.schemeCategory10[i % 10]) // Màu sắc theo khung giờ
+         .on("mouseover", (event, d) => {
+            tooltip.style("opacity", 1)
+                   .html(`
+                     <strong>${d.hour}</strong><br>
+                     <strong>Doanh thu trung bình:</strong> ${d.avgRevenue.toLocaleString()} VNĐ
+                   `)
+                   .style("left", (event.pageX + 10) + "px")
+                   .style("top", (event.pageY - 28) + "px");
+         })
+         .on("mousemove", (event) => {
+            tooltip.style("left", (event.pageX + 10) + "px")
+                   .style("top", (event.pageY - 28) + "px");
+         })
+         .on("mouseout", () => {
+            tooltip.style("opacity", 0);
+         });
+
+      svg.selectAll(".label")
+         .data(result)
+         .enter()
+         .append("text")
+         .attr("x", d => x(d.hour) + x.bandwidth() / 2)
+         .attr("y", d => y(d.avgRevenue) - 5)
+         .attr("text-anchor", "middle")
+         .style('font-size', '12px')
+         .text(d => `${d.avgRevenue.toLocaleString()} VNĐ`);; // Hiển thị theo K
+    }).catch(error => {
+      console.error("Lỗi khi load file CSV:", error);
+    });
+  </script>
+</body>
+</html>
